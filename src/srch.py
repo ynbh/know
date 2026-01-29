@@ -1,3 +1,4 @@
+import sys
 import typer
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -7,7 +8,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from src.db import ingest, search as run_search, clear, SUPPORTED_EXTENSIONS
+from src.db import ingest, search as run_search, clear, SUPPORTED_EXTENSIONS, has_index
 from src.output import render_response
 
 app = typer.Typer(help="srch - semantic search CLI")
@@ -54,6 +55,77 @@ def _parse_globs(globs: Optional[list[str]]) -> list[str]:
             if g:
                 processed.append(g)
     return processed
+
+
+def _ensure_index_ready() -> None:
+    if has_index():
+        return
+    console.print("[yellow]No index found.[/]")
+    console.print("To get started, run:")
+    console.print("  srch add <dir>")
+    console.print("  srch index")
+    raise typer.Exit(1)
+
+
+def _maybe_prefix_search(args: list[str]) -> list[str]:
+    if len(args) < 2:
+        return args
+    first = args[1]
+    if first in {"add", "index", "search", "dirs", "reset", "--help", "-h"}:
+        return args
+    if first.startswith("-"):
+        return args
+    return [args[0], "search", *args[1:]]
+
+
+def _run_search(
+    query: str,
+    limit: int,
+    globs: Optional[list[str]],
+    since: Optional[str],
+    bm25: bool,
+    hybrid: bool,
+    benchmark: bool,
+    plain: bool,
+    json_out: Optional[Path],
+    json_stdout: bool,
+) -> None:
+    processed_globs = _parse_globs(globs)
+    try:
+        since_ts = _parse_since(since)
+    except ValueError:
+        console.print("[red]Error:[/] --since must be like 7d, 12h, 30m, or 2024-01-15")
+        raise typer.Exit(1)
+    if sum([bm25, hybrid]) > 1:
+        console.print("[red]Error:[/] Choose only one of --bm25 or --hybrid")
+        raise typer.Exit(1)
+
+    mode = "dense"
+    if bm25:
+        mode = "bm25"
+    if hybrid:
+        mode = "hybrid"
+
+    if plain and json_stdout:
+        console.print("[red]Error:[/] Choose only one of --plain or --json")
+        raise typer.Exit(1)
+
+    output = "rich"
+    if plain:
+        output = "plain"
+    if json_stdout:
+        output = "json"
+
+    _ensure_index_ready()
+    response = run_search(
+        query,
+        limit=limit,
+        include_globs=processed_globs,
+        since_timestamp=since_ts,
+        mode=mode,
+        benchmark=benchmark,
+    )
+    render_response(response, output=output, json_out=json_out)
 
 
 @app.command()
@@ -213,41 +285,18 @@ def search(
     ] = False,
 ) -> None:
     """Search indexed documents."""
-    processed_globs = _parse_globs(globs)
-    try:
-        since_ts = _parse_since(since)
-    except ValueError:
-        console.print("[red]Error:[/] --since must be like 7d, 12h, 30m, or 2024-01-15")
-        raise typer.Exit(1)
-    if sum([bm25, hybrid]) > 1:
-        console.print("[red]Error:[/] Choose only one of --bm25 or --hybrid")
-        raise typer.Exit(1)
-
-    mode = "dense"
-    if bm25:
-        mode = "bm25"
-    if hybrid:
-        mode = "hybrid"
-
-    if plain and json_stdout:
-        console.print("[red]Error:[/] Choose only one of --plain or --json")
-        raise typer.Exit(1)
-
-    output = "rich"
-    if plain:
-        output = "plain"
-    if json_stdout:
-        output = "json"
-
-    response = run_search(
-        query,
+    _run_search(
+        query=query,
         limit=limit,
-        include_globs=processed_globs,
-        since_timestamp=since_ts,
-        mode=mode,
+        globs=globs,
+        since=since,
+        bm25=bm25,
+        hybrid=hybrid,
         benchmark=benchmark,
+        plain=plain,
+        json_out=json_out,
+        json_stdout=json_stdout,
     )
-    render_response(response, output=output, json_out=json_out)
 
 
 @app.command()
@@ -274,4 +323,5 @@ def reset() -> None:
 
 
 def main() -> None:
+    sys.argv = _maybe_prefix_search(sys.argv)
     app()

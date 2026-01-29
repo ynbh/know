@@ -26,6 +26,13 @@ dense_collection = client.get_or_create_collection(name="documents")
 SUPPORTED_EXTENSIONS = [".md", ".txt", ".pdf", ".docx", ".pptx", ".html"]
 
 
+def has_index() -> bool:
+    try:
+        return dense_collection.count() > 0
+    except Exception:
+        return False
+
+
 def ingest(
     directory: str,
     extensions: list[str] | None = None,

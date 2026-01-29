@@ -25,7 +25,7 @@ uv sync
 ```bash
 srch add ~/Documents/notes
 srch index
-srch search "retrieval augmented generation"
+srch "retrieval augmented generation"
 ```
 
 ## Commands
@@ -36,6 +36,8 @@ srch index [--log] [--ext .md --ext .txt] [--recursive/--no-recursive] \
   [--chunk-size 512] [--overlap 50] [--force] [--glob "**/*.md"] \
   [--since 7d]
 srch search <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
+  [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
+srch <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
   [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
 srch dirs
 srch reset
