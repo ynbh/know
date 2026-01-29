@@ -13,3 +13,8 @@ dependencies = [
 
 [project.scripts]
 srch = "src.srch:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.14",
+]

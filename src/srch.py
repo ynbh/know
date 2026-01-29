@@ -43,12 +43,26 @@ def add(directory: Path) -> None:
 
 @app.command()
 def index(
-    log: Annotated[bool, typer.Option("--log", "-l", help="Show detailed logs")] = False,
-    extensions: Annotated[Optional[list[str]], typer.Option("--ext", "-e", help="File extensions to index")] = None,
-    recursive: Annotated[bool, typer.Option("--recursive/--no-recursive", "-r/-R", help="Scan subdirectories")] = True,
-    chunk_size: Annotated[int, typer.Option("--chunk-size", "-c", help="Chunk size in tokens")] = 512,
-    chunk_overlap: Annotated[int, typer.Option("--overlap", "-o", help="Chunk overlap in tokens")] = 50,
-    force: Annotated[bool, typer.Option("--force", "-f", help="Clear and re-index everything")] = False,
+    log: Annotated[
+        bool, typer.Option("--log", "-l", help="Show detailed logs")
+    ] = False,
+    extensions: Annotated[
+        Optional[list[str]],
+        typer.Option("--ext", "-e", help="File extensions to index"),
+    ] = None,
+    recursive: Annotated[
+        bool,
+        typer.Option("--recursive/--no-recursive", "-r/-R", help="Scan subdirectories"),
+    ] = True,
+    chunk_size: Annotated[
+        int, typer.Option("--chunk-size", "-c", help="Chunk size in tokens")
+    ] = 512,
+    chunk_overlap: Annotated[
+        int, typer.Option("--overlap", "-o", help="Chunk overlap in tokens")
+    ] = 50,
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="Clear and re-index everything")
+    ] = False,
 ) -> None:
     """Index all watched directories."""
     dirs = _load_dirs()
@@ -89,7 +103,9 @@ def index(
         total_added += added
         total_skipped += skipped
 
-    console.print(f"[green]OK[/] Total: [bold]{total_added}[/] new, [dim]{total_skipped} unchanged[/]")
+    console.print(
+        f"[green]OK[/] Total: [bold]{total_added}[/] new, [dim]{total_skipped} unchanged[/]"
+    )
 
 
 @app.command()

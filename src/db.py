@@ -92,19 +92,23 @@ def ingest(
             collection.upsert(
                 ids=[chunk_id],
                 documents=[node.text],
-                metadatas=[{
-                    "path": source_path,
-                    "filename": file_path.name,
-                    "extension": file_path.suffix,
-                    "size_bytes": stat.st_size if stat else 0,
-                    "chunk_index": node.metadata.get("chunk_index", 0),
-                    "node_id": node.node_id,
-                }],
+                metadatas=[
+                    {
+                        "path": source_path,
+                        "filename": file_path.name,
+                        "extension": file_path.suffix,
+                        "size_bytes": stat.st_size if stat else 0,
+                        "chunk_index": node.metadata.get("chunk_index", 0),
+                        "node_id": node.node_id,
+                    }
+                ],
             )
             added += 1
             progress.advance(task)
 
-    console.print(f"[green]OK[/] Indexed [bold]{added}[/] new, [dim]{skipped} unchanged[/]")
+    console.print(
+        f"[green]OK[/] Indexed [bold]{added}[/] new, [dim]{skipped} unchanged[/]"
+    )
     return added, skipped
 
 
@@ -150,12 +154,15 @@ def ask(query: str, limit: int = 5) -> None:
     table.add_column("File", style="green", overflow="fold")
     table.add_column("Path", style="dim", overflow="fold", max_width=40)
     table.add_column("Snippet", style="white", overflow="fold", max_width=60)
-    
-    for i, (doc, meta, dist) in enumerate(zip(
-        results["documents"][0],
-        results["metadatas"][0],
-        results["distances"][0],
-    ), 1):
+
+    for i, (doc, meta, dist) in enumerate(
+        zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
+        ),
+        1,
+    ):
         table.add_row(
             str(i),
             f"{dist:.4f}",
@@ -174,11 +181,13 @@ def ask(query: str, limit: int = 5) -> None:
         f"{top_meta.get('size_bytes', 0)} bytes",
         style="dim",
     )
-    console.print(Panel(
-        Group(meta_line, Text(preview_text(top_doc, 800))),
-        title=f"[bold]Top match:[/] {top_meta['filename']}",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            Group(meta_line, Text(preview_text(top_doc, 800))),
+            title=f"[bold]Top match:[/] {top_meta['filename']}",
+            border_style="green",
+        )
+    )
 
 
 def clear():
