@@ -1,26 +1,27 @@
+import fnmatch
 import hashlib
+import shutil
 from pathlib import Path
 
 import chromadb
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
-from rich import box
-from rich.console import Console, Group
-from rich.panel import Panel
+from rich.console import Console
 from rich.progress import (
     BarColumn,
     Progress,
-    SpinnerColumn,
     TaskProgressColumn,
     TextColumn,
     TimeRemainingColumn,
 )
-from rich.table import Table
-from rich.text import Text
+from src.bm25 import BM25Index, load_cached_index, save_cached_index
+from src.models import BenchmarkResult, ResultSet
+from src.retrieval import SearchItem, rrf_fuse
 
 console = Console()
 client = chromadb.PersistentClient(path="./srch_index")
-collection = client.get_or_create_collection(name="documents")
+
+dense_collection = client.get_or_create_collection(name="documents")
 
 SUPPORTED_EXTENSIONS = [".md", ".txt", ".pdf", ".docx", ".pptx", ".html"]
 
@@ -28,6 +29,8 @@ SUPPORTED_EXTENSIONS = [".md", ".txt", ".pdf", ".docx", ".pptx", ".html"]
 def ingest(
     directory: str,
     extensions: list[str] | None = None,
+    include_globs: list[str] | None = None,
+    since_timestamp: float | None = None,
     recursive: bool = True,
     chunk_size: int = 512,
     chunk_overlap: int = 50,
@@ -55,6 +58,38 @@ def ingest(
         console.print("[yellow]No documents found[/]")
         return 0, 0
 
+    base_dir = Path(directory)
+    if include_globs:
+        filtered: list = []
+        base_resolved = base_dir.resolve()
+        for doc in documents:
+            source_path = doc.metadata.get("file_path", "")
+            source_resolved = Path(source_path).resolve()
+            if source_resolved.is_relative_to(base_resolved):
+                rel_str = source_resolved.relative_to(base_resolved).as_posix()
+            else:
+                rel_str = source_resolved.name
+            if any(
+                fnmatch.fnmatch(rel_str, pattern) for pattern in include_globs
+            ) or any(
+                fnmatch.fnmatch(source_path, pattern) for pattern in include_globs
+            ):
+                filtered.append(doc)
+        documents = filtered
+
+    if since_timestamp is not None:
+        filtered = []
+        for doc in documents:
+            source_path = doc.metadata.get("file_path", "")
+            mtime = Path(source_path).stat().st_mtime
+            if mtime >= since_timestamp:
+                filtered.append(doc)
+        documents = filtered
+
+    if not documents:
+        console.print("[yellow]No documents found[/]")
+        return 0, 0
+
     if log:
         console.log(f"Loaded [green]{len(documents)}[/] documents")
 
@@ -67,44 +102,54 @@ def ingest(
     added, skipped = 0, 0
 
     with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
+        TextColumn("[bold cyan]Indexing[/]"),
+        BarColumn(
+            bar_width=32,
+            complete_style="green",
+            finished_style="green",
+        ),
         TaskProgressColumn(),
+        TextColumn("{task.completed}/{task.total}"),
         TimeRemainingColumn(),
+        TextColumn(
+            "[dim]added {task.fields[added]} · skipped {task.fields[skipped]}[/]"
+        ),
         console=console,
-        transient=True,
+        transient=False,
     ) as progress:
-        task = progress.add_task("Indexing...", total=len(nodes))
+        task = progress.add_task("", total=len(nodes), added=0, skipped=0)
 
         for node in nodes:
             source_path = node.metadata.get("file_path", "unknown")
-            chunk_id = hashlib.md5(f"{source_path}:{node.node_id}".encode()).hexdigest()
+            chunk_index = node.metadata.get("chunk_index", 0)
+            chunk_id = hashlib.md5(
+                f"{source_path}:{chunk_index}:{node.text}".encode()
+            ).hexdigest()
 
-            if collection.get(ids=[chunk_id])["ids"]:
+            if dense_collection.get(ids=[chunk_id])["ids"]:
                 skipped += 1
-                progress.advance(task)
+                progress.update(task, advance=1, skipped=skipped, added=added)
                 continue
 
             file_path = Path(source_path)
             stat = file_path.stat() if file_path.exists() else None
 
-            collection.upsert(
+            dense_collection.upsert(
                 ids=[chunk_id],
-                documents=[node.text],
+                documents=[f"{file_path.name}\n\n{node.text}"],
                 metadatas=[
                     {
                         "path": source_path,
                         "filename": file_path.name,
                         "extension": file_path.suffix,
                         "size_bytes": stat.st_size if stat else 0,
-                        "chunk_index": node.metadata.get("chunk_index", 0),
+                        "chunk_index": chunk_index,
                         "node_id": node.node_id,
                     }
                 ],
             )
             added += 1
-            progress.advance(task)
+            progress.update(task, advance=1, skipped=skipped, added=added)
 
     console.print(
         f"[green]OK[/] Indexed [bold]{added}[/] new, [dim]{skipped} unchanged[/]"
@@ -112,88 +157,216 @@ def ingest(
     return added, skipped
 
 
-def ask(query: str, limit: int = 5) -> None:
+def _filter_items(
+    items: list[SearchItem],
+    include_globs: list[str] | None,
+    since_timestamp: float | None,
+) -> list[SearchItem]:
+    if not include_globs and since_timestamp is None:
+        return items
+
+    filtered: list[SearchItem] = []
+    for item in items:
+        source_path = item.meta.get("path", "")
+        if include_globs:
+            path_str = Path(source_path).as_posix()
+            base_name = Path(source_path).name
+            if not any(
+                fnmatch.fnmatch(path_str, pattern)
+                or fnmatch.fnmatch(base_name, pattern)
+                for pattern in include_globs
+            ):
+                continue
+        if since_timestamp is not None:
+            path = Path(source_path)
+            if not path.exists():
+                continue
+            mtime = path.stat().st_mtime
+            if mtime < since_timestamp:
+                continue
+        filtered.append(item)
+    return filtered
+
+
+def _query_items(
+    collection: chromadb.Collection,
+    query: str,
+    limit: int,
+    include_globs: list[str] | None,
+    since_timestamp: float | None,
+) -> list[SearchItem]:
     results = collection.query(query_texts=[query], n_results=limit)
-
     if not results["documents"][0]:
-        console.print("[yellow]No results found[/]")
-        return
+        return []
 
-    def preview_text(text: str, limit_chars: int) -> str:
-        cleaned = text.replace("\n", " ")
-        return cleaned[:limit_chars] + ("..." if len(cleaned) > limit_chars else "")
-
-    def shorten_middle(text: str, max_len: int) -> str:
-        if len(text) <= max_len:
-            return text
-        keep = max_len - 3
-        head = keep // 2
-        tail = keep - head
-        return f"{text[:head]}...{text[-tail:]}"
-
-    def display_path(path: str, max_len: int = 60) -> str:
-        try:
-            p = Path(path)
-            home = Path.home()
-            try:
-                display = f"~/{p.relative_to(home)}"
-            except ValueError:
-                display = str(p)
-        except Exception:
-            display = path
-        return shorten_middle(display, max_len)
-
-    table = Table(
-        title=f"Results for: [italic]{query}[/]",
-        box=box.SIMPLE_HEAVY,
-        show_lines=True,
-        pad_edge=False,
-    )
-    table.add_column("#", style="dim", width=3, justify="right")
-    table.add_column("Distance", style="cyan", width=9, justify="right")
-    table.add_column("File", style="green", overflow="fold")
-    table.add_column("Path", style="dim", overflow="fold", max_width=40)
-    table.add_column("Snippet", style="white", overflow="fold", max_width=60)
-
-    for i, (doc, meta, dist) in enumerate(
-        zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
-        ),
-        1,
+    items: list[SearchItem] = []
+    for doc, meta, dist, item_id in zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0],
+        results["ids"][0],
     ):
-        table.add_row(
-            str(i),
-            f"{dist:.4f}",
-            meta["filename"],
-            display_path(meta["path"], 60),
-            preview_text(doc, 200),
+        items.append(
+            SearchItem(
+                key=item_id,
+                doc=doc,
+                meta=meta,
+                distance=dist,
+            )
         )
 
-    console.print(table)
+    return _filter_items(items, include_globs, since_timestamp)
 
-    top_doc = results["documents"][0][0]
-    top_meta = results["metadatas"][0][0]
-    meta_line = Text(
-        f"{display_path(top_meta['path'], 100)}  ·  "
-        f"chunk {top_meta.get('chunk_index', 0)}  ·  "
-        f"{top_meta.get('size_bytes', 0)} bytes",
-        style="dim",
+
+def _bm25_query_items(
+    query: str,
+    limit: int,
+    include_globs: list[str] | None,
+    since_timestamp: float | None,
+) -> list[SearchItem]:
+    doc_count = dense_collection.count()
+    if doc_count == 0:
+        return []
+
+    cache = load_cached_index(doc_count)
+    ids: list[str]
+    if cache is None:
+        docs = dense_collection.get(include=["documents"])
+        if not docs["documents"]:
+            return []
+        index = BM25Index.from_documents(
+            ids=docs["ids"],
+            documents=docs["documents"],
+            metadatas=[],
+        )
+        retriever = index.bm25
+        ids = docs["ids"]
+        save_cached_index(retriever, ids)
+    else:
+        retriever, ids = cache
+
+    extra = max(limit * 3, 20)
+    query_index = BM25Index(ids=ids, documents=[], metadatas=[], bm25=retriever)
+    ranked_ids, scores = query_index.query_ids(query, limit=min(extra, len(ids)))
+    if not ranked_ids:
+        return []
+
+    fetched = dense_collection.get(ids=ranked_ids, include=["documents", "metadatas"])
+    by_id = {
+        doc_id: (doc, meta)
+        for doc_id, doc, meta in zip(
+            fetched["ids"], fetched["documents"], fetched["metadatas"]
+        )
+    }
+    items: list[SearchItem] = []
+    for doc_id, score in zip(ranked_ids, scores):
+        payload = by_id.get(doc_id)
+        if payload is None:
+            continue
+        doc, meta = payload
+        items.append(
+            SearchItem(
+                key=doc_id,
+                doc=doc,
+                meta=meta,
+                distance=score,
+            )
+        )
+
+    items = _filter_items(items, include_globs, since_timestamp)
+    return items[:limit]
+
+
+def search(
+    query: str,
+    limit: int = 5,
+    include_globs: list[str] | None = None,
+    since_timestamp: float | None = None,
+    mode: str = "dense",
+    benchmark: bool = False,
+) -> ResultSet | BenchmarkResult:
+    needs_filter = bool(include_globs) or since_timestamp is not None
+    base_limit = max(limit, 10) if benchmark else limit
+    candidate_limit = max(base_limit * 3, 20) if needs_filter else base_limit
+    dense_items = _query_items(
+        dense_collection,
+        query,
+        candidate_limit,
+        include_globs,
+        since_timestamp,
     )
-    console.print(
-        Panel(
-            Group(meta_line, Text(preview_text(top_doc, 800))),
-            title=f"[bold]Top match:[/] {top_meta['filename']}",
-            border_style="green",
+    if len(dense_items) > limit:
+        dense_items = dense_items[:limit]
+
+    if benchmark:
+        bm25_items = _bm25_query_items(
+            query, max(limit, 10), include_globs, since_timestamp
         )
+        dense_set = ResultSet(
+            query=query,
+            mode="dense",
+            title=f"Dense results: {query}",
+            score_label="Distance",
+            items=dense_items,
+        )
+        bm25_set = ResultSet(
+            query=query,
+            mode="bm25",
+            title=f"BM25 results: {query}",
+            score_label="Score",
+            items=bm25_items,
+        )
+        return BenchmarkResult(query=query, dense=dense_set, bm25=bm25_set)
+
+    if mode == "bm25":
+        bm25_items = _bm25_query_items(query, limit, include_globs, since_timestamp)
+        return ResultSet(
+            query=query,
+            mode="bm25",
+            title=f"BM25 results: {query}",
+            score_label="Score",
+            items=bm25_items,
+        )
+
+    if mode == "hybrid":
+        dense_items = _query_items(
+            dense_collection, query, max(limit * 3, 20), include_globs, since_timestamp
+        )
+        bm25_items = _bm25_query_items(
+            query, max(limit * 3, 20), include_globs, since_timestamp
+        )
+        fused = rrf_fuse([dense_items, bm25_items], limit=limit)
+        fused_items = [
+            SearchItem(
+                key=f.item.key,
+                doc=f.item.doc,
+                meta=f.item.meta,
+                distance=f.score,
+            )
+            for f in fused
+        ]
+        return ResultSet(
+            query=query,
+            mode="hybrid",
+            title=f"Hybrid results: {query}",
+            score_label="RRF",
+            items=fused_items,
+        )
+
+    return ResultSet(
+        query=query,
+        mode="dense",
+        title=f"Results for: {query}",
+        score_label="Distance",
+        items=dense_items,
     )
 
 
 def clear():
-    global collection
+    global dense_collection
     client.delete_collection(name="documents")
-    collection = client.get_or_create_collection(name="documents")
+    dense_collection = client.get_or_create_collection(name="documents")
+    shutil.rmtree("./srch_index/bm25", ignore_errors=True)
     console.print("[green]Collection cleared")
 
 

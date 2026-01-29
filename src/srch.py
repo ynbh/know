@@ -1,12 +1,14 @@
 import typer
 from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Optional
 from typing_extensions import Annotated
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from src.db import ingest, ask, clear, SUPPORTED_EXTENSIONS
+from src.db import ingest, search as run_search, clear, SUPPORTED_EXTENSIONS
+from src.output import render_response
 
 app = typer.Typer(help="srch - semantic search CLI")
 console = Console()
@@ -22,6 +24,36 @@ def _load_dirs() -> list[str]:
 
 def _save_dirs(directories: list[str]) -> None:
     INDEX_FILE.write_text("\n".join(directories))
+
+
+def _parse_since(since: Optional[str]) -> float | None:
+    if not since:
+        return None
+    value = since.strip()
+    if not value:
+        return None
+    unit_map = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+    unit = value[-1].lower()
+    if unit in unit_map and value[:-1].isdigit():
+        delta = int(value[:-1]) * unit_map[unit]
+        return (datetime.now() - timedelta(seconds=delta)).timestamp()
+    if "T" in value:
+        dt = datetime.fromisoformat(value)
+    else:
+        dt = datetime.strptime(value, "%Y-%m-%d")
+    return dt.timestamp()
+
+
+def _parse_globs(globs: Optional[list[str]]) -> list[str]:
+    processed: list[str] = []
+    if not globs:
+        return processed
+    for pattern in globs:
+        for g in pattern.split(","):
+            g = g.strip()
+            if g:
+                processed.append(g)
+    return processed
 
 
 @app.command()
@@ -49,6 +81,21 @@ def index(
     extensions: Annotated[
         Optional[list[str]],
         typer.Option("--ext", "-e", help="File extensions to index"),
+    ] = None,
+    globs: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--glob",
+            "-g",
+            help="Include only files matching glob patterns (e.g. **/*.md, notes/**)",
+        ),
+    ] = None,
+    since: Annotated[
+        Optional[str],
+        typer.Option(
+            "--since",
+            help="Only index files modified since (e.g. 7d, 12h, 30m, 2024-01-15)",
+        ),
     ] = None,
     recursive: Annotated[
         bool,
@@ -83,9 +130,21 @@ def index(
                     processed_exts.append(e if e.startswith(".") else f".{e}")
     ext_filter = processed_exts or SUPPORTED_EXTENSIONS
 
+    processed_globs = _parse_globs(globs)
+
+    try:
+        since_ts = _parse_since(since)
+    except ValueError:
+        console.print("[red]Error:[/] --since must be like 7d, 12h, 30m, or 2024-01-15")
+        raise typer.Exit(1)
+
     console.print(f"[bold]Indexing {len(dirs)} directories[/]")
     if log:
         console.print(f"Extensions: {ext_filter}")
+        if processed_globs:
+            console.print(f"Globs: {processed_globs}")
+        if since_ts is not None:
+            console.print(f"Since: {since}")
         console.print(f"Chunk size: {chunk_size}, overlap: {chunk_overlap}")
 
     total_added, total_skipped = 0, 0
@@ -95,6 +154,8 @@ def index(
         added, skipped = ingest(
             d,
             extensions=ext_filter,
+            include_globs=processed_globs,
+            since_timestamp=since_ts,
             recursive=recursive,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -112,9 +173,81 @@ def index(
 def search(
     query: Annotated[str, typer.Argument(help="Search query")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Number of results")] = 5,
+    globs: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--glob",
+            "-g",
+            help="Include only files matching glob patterns (e.g. **/*.md, notes/**)",
+        ),
+    ] = None,
+    since: Annotated[
+        Optional[str],
+        typer.Option(
+            "--since",
+            help="Only include files modified since (e.g. 7d, 12h, 30m, 2024-01-15)",
+        ),
+    ] = None,
+    bm25: Annotated[
+        bool, typer.Option("--bm25", help="Use BM25 lexical search")
+    ] = False,
+    hybrid: Annotated[
+        bool, typer.Option("--hybrid", help="Use hybrid BM25 + vector search")
+    ] = False,
+    benchmark: Annotated[
+        bool,
+        typer.Option(
+            "--benchmark",
+            help="Show dense vs BM25 results for comparison",
+        ),
+    ] = False,
+    plain: Annotated[
+        bool, typer.Option("--plain", help="Render results as plain text")
+    ] = False,
+    json_out: Annotated[
+        Optional[Path],
+        typer.Option("--json-out", help="Write JSON results to a file"),
+    ] = None,
+    json_stdout: Annotated[
+        bool, typer.Option("--json", help="Render results as JSON")
+    ] = False,
 ) -> None:
     """Search indexed documents."""
-    ask(query, limit=limit)
+    processed_globs = _parse_globs(globs)
+    try:
+        since_ts = _parse_since(since)
+    except ValueError:
+        console.print("[red]Error:[/] --since must be like 7d, 12h, 30m, or 2024-01-15")
+        raise typer.Exit(1)
+    if sum([bm25, hybrid]) > 1:
+        console.print("[red]Error:[/] Choose only one of --bm25 or --hybrid")
+        raise typer.Exit(1)
+
+    mode = "dense"
+    if bm25:
+        mode = "bm25"
+    if hybrid:
+        mode = "hybrid"
+
+    if plain and json_stdout:
+        console.print("[red]Error:[/] Choose only one of --plain or --json")
+        raise typer.Exit(1)
+
+    output = "rich"
+    if plain:
+        output = "plain"
+    if json_stdout:
+        output = "json"
+
+    response = run_search(
+        query,
+        limit=limit,
+        include_globs=processed_globs,
+        since_timestamp=since_ts,
+        mode=mode,
+        benchmark=benchmark,
+    )
+    render_response(response, output=output, json_out=json_out)
 
 
 @app.command()

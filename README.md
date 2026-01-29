@@ -33,8 +33,10 @@ srch search "retrieval augmented generation"
 ```bash
 srch add <dir>
 srch index [--log] [--ext .md --ext .txt] [--recursive/--no-recursive] \
-  [--chunk-size 512] [--overlap 50] [--force]
-srch search <query> [--limit 5]
+  [--chunk-size 512] [--overlap 50] [--force] [--glob "**/*.md"] \
+  [--since 7d]
+srch search <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
+  [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
 srch dirs
 srch reset
 ```
@@ -43,7 +45,13 @@ srch reset
 
 - Use `--log` when debugging what is being scanned and chunked.
 - Use `--ext` to focus on a small set of file types for faster indexing.
+- Use `--glob` to narrow indexing to matching paths (e.g. `notes/**`).
+- Use `--since` with `7d`, `12h`, or `2024-01-15` to skip older files.
 - Use `--force` to clear and rebuild the index from scratch.
+- Use `--bm25` for lexical search, or `--hybrid` for BM25 + vector fusion.
+- BM25 search builds a lightweight index from stored chunks and caches it under `srch_index/bm25`.
+- Use `--benchmark` to compare dense vs BM25 results side-by-side.
+- Use `--plain` for plain-text output, `--json` for JSON output, and `--json-out` to save JSON to a file.
 
 ## How it works
 
