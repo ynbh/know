@@ -2287,7 +2287,7 @@ asyncio = [
 ]
 
 [[package]]
-name = "srch"
+name = "know"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

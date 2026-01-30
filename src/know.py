@@ -11,10 +11,10 @@ from rich.table import Table
 from src.db import ingest, search as run_search, clear, SUPPORTED_EXTENSIONS, has_index
 from src.output import render_response
 
-app = typer.Typer(help="srch - semantic search CLI")
+app = typer.Typer(help="know - semantic search CLI")
 console = Console()
 
-INDEX_FILE = Path.home() / ".srch_dirs"
+INDEX_FILE = Path.home() / ".know_dirs"
 
 
 def _load_dirs() -> list[str]:
@@ -62,8 +62,8 @@ def _ensure_index_ready() -> None:
         return
     console.print("[yellow]No index found.[/]")
     console.print("To get started, run:")
-    console.print("  srch add <dir>")
-    console.print("  srch index")
+    console.print("  know add <dir>")
+    console.print("  know index")
     raise typer.Exit(1)
 
 
@@ -187,7 +187,7 @@ def index(
     dirs = _load_dirs()
 
     if not dirs:
-        console.print("[yellow]No directories added. Use 'srch add <dir>' first.[/]")
+        console.print("[yellow]No directories added. Use 'know add <dir>' first.[/]")
         return
 
     if force:

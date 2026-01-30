@@ -19,7 +19,7 @@ from src.models import BenchmarkResult, ResultSet
 from src.retrieval import SearchItem, rrf_fuse
 
 console = Console()
-client = chromadb.PersistentClient(path="./srch_index")
+client = chromadb.PersistentClient(path="./know_index")
 
 dense_collection = client.get_or_create_collection(name="documents")
 
@@ -107,6 +107,52 @@ def ingest(
         console.log(f"Created [green]{len(nodes)}[/] chunks")
 
     added, skipped = 0, 0
+    batch_size = 100
+
+    # prepare all chunks first, checking which already exist
+    pending_ids: list[str] = []
+    pending_docs: list[str] = []
+    pending_metas: list[dict] = []
+    node_data: list[tuple[str, str, dict]] = []
+
+    for node in nodes:
+        source_path = node.metadata.get("file_path", "unknown")
+        chunk_index = node.metadata.get("chunk_index", 0)
+        chunk_id = hashlib.md5(
+            f"{source_path}:{chunk_index}:{node.text}".encode()
+        ).hexdigest()
+        file_path = Path(source_path)
+        stat = file_path.stat() if file_path.exists() else None
+        doc_text = f"{file_path.name}\n\n{node.text}"
+        meta = {
+            "path": source_path,
+            "filename": file_path.name,
+            "extension": file_path.suffix,
+            "size_bytes": stat.st_size if stat else 0,
+            "chunk_index": chunk_index,
+            "node_id": node.node_id,
+        }
+        node_data.append((chunk_id, doc_text, meta))
+
+    # batch check for existing ids
+    all_ids = [nd[0] for nd in node_data]
+    existing_ids: set[str] = set()
+    for i in range(0, len(all_ids), batch_size):
+        batch_ids = all_ids[i : i + batch_size]
+        result = dense_collection.get(ids=batch_ids)
+        existing_ids.update(result["ids"])
+
+    # filter to only new chunks
+    for chunk_id, doc_text, meta in node_data:
+        if chunk_id in existing_ids:
+            skipped += 1
+        else:
+            pending_ids.append(chunk_id)
+            pending_docs.append(doc_text)
+            pending_metas.append(meta)
+
+    if log:
+        console.log(f"Skipping {skipped} existing, adding {len(pending_ids)} new")
 
     with Progress(
         TextColumn("[bold cyan]Indexing[/]"),
@@ -124,39 +170,22 @@ def ingest(
         console=console,
         transient=False,
     ) as progress:
-        task = progress.add_task("", total=len(nodes), added=0, skipped=0)
+        total_batches = (len(pending_ids) + batch_size - 1) // batch_size
+        task = progress.add_task("", total=total_batches, added=0, skipped=skipped)
 
-        for node in nodes:
-            source_path = node.metadata.get("file_path", "unknown")
-            chunk_index = node.metadata.get("chunk_index", 0)
-            chunk_id = hashlib.md5(
-                f"{source_path}:{chunk_index}:{node.text}".encode()
-            ).hexdigest()
-
-            if dense_collection.get(ids=[chunk_id])["ids"]:
-                skipped += 1
-                progress.update(task, advance=1, skipped=skipped, added=added)
-                continue
-
-            file_path = Path(source_path)
-            stat = file_path.stat() if file_path.exists() else None
+        # batch upsert for embeddings
+        for i in range(0, len(pending_ids), batch_size):
+            batch_ids = pending_ids[i : i + batch_size]
+            batch_docs = pending_docs[i : i + batch_size]
+            batch_metas = pending_metas[i : i + batch_size]
 
             dense_collection.upsert(
-                ids=[chunk_id],
-                documents=[f"{file_path.name}\n\n{node.text}"],
-                metadatas=[
-                    {
-                        "path": source_path,
-                        "filename": file_path.name,
-                        "extension": file_path.suffix,
-                        "size_bytes": stat.st_size if stat else 0,
-                        "chunk_index": chunk_index,
-                        "node_id": node.node_id,
-                    }
-                ],
+                ids=batch_ids,
+                documents=batch_docs,
+                metadatas=batch_metas,
             )
-            added += 1
-            progress.update(task, advance=1, skipped=skipped, added=added)
+            added += len(batch_ids)
+            progress.update(task, advance=1, added=added, skipped=skipped)
 
     console.print(
         f"[green]OK[/] Indexed [bold]{added}[/] new, [dim]{skipped} unchanged[/]"
@@ -373,7 +402,7 @@ def clear():
     global dense_collection
     client.delete_collection(name="documents")
     dense_collection = client.get_or_create_collection(name="documents")
-    shutil.rmtree("./srch_index/bm25", ignore_errors=True)
+    shutil.rmtree("./know_index/bm25", ignore_errors=True)
     console.print("[green]Collection cleared")
 
 

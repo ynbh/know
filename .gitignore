@@ -10,7 +10,10 @@ wheels/
 .venv
 
 # Local index storage
-srch_index/
+know_index/
 
 # Local docs
 ROADMAP.md
+
+# Benchmark datasets
+bench/

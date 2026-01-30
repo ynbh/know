@@ -6,7 +6,7 @@ import bm25s
 
 from src.retrieval import SearchItem
 
-BM25_CACHE_DIR = Path("./srch_index/bm25")
+BM25_CACHE_DIR = Path("./know_index/bm25")
 BM25_META_PATH = BM25_CACHE_DIR / "meta.json"
 BM25_IDS_PATH = BM25_CACHE_DIR / "ids.json"
 

@@ -1,4 +1,4 @@
-from src.srch import main
+from src.know import main
 
 if __name__ == "__main__":
     main()
