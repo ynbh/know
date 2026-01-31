@@ -8,7 +8,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from src.db import ingest, search as run_search, clear, SUPPORTED_EXTENSIONS, has_index
+from src.db import ingest, search as run_search, clear, SUPPORTED_EXTENSIONS, has_index, IndexReport
 from src.output import render_response
 
 app = typer.Typer(help="know - semantic search CLI")
@@ -71,7 +71,7 @@ def _maybe_prefix_search(args: list[str]) -> list[str]:
     if len(args) < 2:
         return args
     first = args[1]
-    if first in {"add", "index", "search", "dirs", "reset", "--help", "-h"}:
+    if first in {"add", "remove", "index", "search", "dirs", "reset", "--help", "-h"}:
         return args
     if first.startswith("-"):
         return args
@@ -146,6 +146,20 @@ def add(directory: Path) -> None:
 
 
 @app.command()
+def remove(directory: Path) -> None:
+    """Remove a directory from the watch list."""
+    resolved = directory.resolve()
+    dirs = _load_dirs()
+
+    if str(resolved) in dirs:
+        dirs.remove(str(resolved))
+        _save_dirs(dirs)
+        console.print(f"[green]Removed [cyan]{resolved}[/]")
+    else:
+        console.print(f"[yellow]Not in watchlist:[/] {resolved}")
+
+
+@app.command()
 def index(
     log: Annotated[
         bool, typer.Option("--log", "-l", help="Show detailed logs")
@@ -182,6 +196,9 @@ def index(
     force: Annotated[
         bool, typer.Option("--force", "-f", help="Clear and re-index everything")
     ] = False,
+    report: Annotated[
+        Optional[Path], typer.Option("--report", help="Write skip report JSON to file")
+    ] = None,
 ) -> None:
     """Index all watched directories."""
     dirs = _load_dirs()
@@ -220,10 +237,11 @@ def index(
         console.print(f"Chunk size: {chunk_size}, overlap: {chunk_overlap}")
 
     total_added, total_skipped = 0, 0
+    all_skip_entries: list = []
     for d in dirs:
         if log:
             console.rule(d)
-        added, skipped = ingest(
+        result = ingest(
             d,
             extensions=ext_filter,
             include_globs=processed_globs,
@@ -232,13 +250,28 @@ def index(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             log=log,
+            report=report is not None,
         )
-        total_added += added
-        total_skipped += skipped
+        if isinstance(result, IndexReport):
+            total_added += result.added
+            total_skipped += result.skipped
+            all_skip_entries.extend(result.skip_entries)
+        else:
+            total_added += result[0]
+            total_skipped += result[1]
 
     console.print(
         f"[green]OK[/] Total: [bold]{total_added}[/] new, [dim]{total_skipped} unchanged[/]"
     )
+
+    if report is not None:
+        combined = IndexReport(
+            added=total_added,
+            skipped=total_skipped,
+            skip_entries=all_skip_entries,
+        )
+        report.write_text(combined.to_json())
+        console.print(f"[dim]Report written to {report}[/]")
 
 
 @app.command()

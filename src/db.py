@@ -1,6 +1,8 @@
 import fnmatch
 import hashlib
+import json
 import shutil
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import chromadb
@@ -23,7 +25,31 @@ client = chromadb.PersistentClient(path="./know_index")
 
 dense_collection = client.get_or_create_collection(name="documents")
 
-SUPPORTED_EXTENSIONS = [".md", ".txt", ".pdf", ".docx", ".pptx", ".html"]
+SUPPORTED_EXTENSIONS = [
+    # documents
+    ".md", ".txt", ".pdf", ".docx", ".pptx", ".html",
+    # code
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
+    ".c", ".cpp", ".h", ".hpp", ".rb", ".sh", ".lua", ".swift",
+]
+
+
+@dataclass
+class SkipEntry:
+    path: str
+    chunk_index: int
+    reason: str
+    collides_with: str | None = None  # path of the file this collides with
+
+
+@dataclass
+class IndexReport:
+    added: int
+    skipped: int
+    skip_entries: list[SkipEntry]
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), indent=2)
 
 
 def has_index() -> bool:
@@ -42,7 +68,8 @@ def ingest(
     chunk_size: int = 512,
     chunk_overlap: int = 50,
     log: bool = False,
-) -> tuple[int, int]:
+    report: bool = False,
+) -> tuple[int, int] | IndexReport:
     ext_filter = extensions or SUPPORTED_EXTENSIONS
 
     if log:
@@ -134,19 +161,38 @@ def ingest(
         }
         node_data.append((chunk_id, doc_text, meta))
 
-    # batch check for existing ids
+    # batch check for existing ids (dedupe to avoid chromadb error)
     all_ids = [nd[0] for nd in node_data]
     existing_ids: set[str] = set()
     for i in range(0, len(all_ids), batch_size):
-        batch_ids = all_ids[i : i + batch_size]
+        batch_ids = list(set(all_ids[i : i + batch_size]))  # dedupe within batch
         result = dense_collection.get(ids=batch_ids)
         existing_ids.update(result["ids"])
 
-    # filter to only new chunks
+    # filter to only new chunks (track seen to avoid duplicates within batch)
+    seen_ids: dict[str, str] = {}  # chunk_id -> path of first occurrence
+    skip_entries: list[SkipEntry] = []
     for chunk_id, doc_text, meta in node_data:
         if chunk_id in existing_ids:
             skipped += 1
+            if report:
+                skip_entries.append(SkipEntry(
+                    path=meta["path"],
+                    chunk_index=meta["chunk_index"],
+                    reason="already_indexed",
+                    collides_with=None,  # we don't track the original for existing
+                ))
+        elif chunk_id in seen_ids:
+            skipped += 1
+            if report:
+                skip_entries.append(SkipEntry(
+                    path=meta["path"],
+                    chunk_index=meta["chunk_index"],
+                    reason="duplicate_content",
+                    collides_with=seen_ids[chunk_id],
+                ))
         else:
+            seen_ids[chunk_id] = meta["path"]
             pending_ids.append(chunk_id)
             pending_docs.append(doc_text)
             pending_metas.append(meta)
@@ -190,6 +236,8 @@ def ingest(
     console.print(
         f"[green]OK[/] Indexed [bold]{added}[/] new, [dim]{skipped} unchanged[/]"
     )
+    if report:
+        return IndexReport(added=added, skipped=skipped, skip_entries=skip_entries)
     return added, skipped
 
 

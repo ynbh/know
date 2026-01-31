@@ -2,7 +2,7 @@
 
 `know` is a small semantic search CLI for local files. It watches directories,
 chunks documents, and stores embeddings in a local Chroma index so you can
-query your notes or docs quickly from the terminal.
+query your notes, docs, or code quickly from the terminal.
 
 ## What it does
 
@@ -10,7 +10,9 @@ query your notes or docs quickly from the terminal.
 - Index supported file types into a local vector store
 - Search with a short CLI command and view ranked results
 
-Supported extensions: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.html`.
+Supported extensions: `.md`, `.txt`, `.pdf`, `.docx`, `.pptx`, `.html`,
+`.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.go`, `.rs`, `.java`, `.c`, `.cpp`,
+`.h`, `.hpp`, `.rb`, `.sh`, `.lua`, `.swift`.
 
 ## Install
 
@@ -23,18 +25,19 @@ uv sync
 ## Quick start
 
 ```bash
-know add ~/Documents/notes
-know index
-know "retrieval augmented generation"
+uv run know add ~/Documents/notes
+uv run know index
+uv run know "retrieval augmented generation"
 ```
 
 ## Commands
 
 ```bash
 know add <dir>
+know remove <dir>
 know index [--log] [--ext .md --ext .txt] [--recursive/--no-recursive] \
   [--chunk-size 512] [--overlap 50] [--force] [--glob "**/*.md"] \
-  [--since 7d]
+  [--since 7d] [--report report.json]
 know search <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
   [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
 know <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
@@ -54,12 +57,16 @@ know reset
 - BM25 search builds a lightweight index from stored chunks and caches it under `know_index/bm25`.
 - Use `--benchmark` to compare dense vs BM25 results side-by-side.
 - Use `--plain` for plain-text output, `--json` for JSON output, and `--json-out` to save JSON to a file.
+- Use `--report` to capture skipped chunks (already indexed or duplicate content).
 
 ## How it works
 
 `know` reads files with `llama-index`, splits them into chunks with a sentence
 splitter, and stores them in a local Chroma collection under `./know_index`.
 Search results show a ranked table plus a detailed preview of the top match.
+
+Directories are tracked in `~/.know_dirs`. BM25 search builds a cached index
+under `./know_index/bm25`.
 
 ## Development
 

@@ -844,6 +844,37 @@ wheels = [
 ]
 
 [[package]]
+name = "know"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "bm25s" },
+    { name = "chromadb" },
+    { name = "llama-index-core" },
+    { name = "llama-index-readers-file" },
+    { name = "pystemmer" },
+    { name = "typer" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bm25s", specifier = ">=0.1.10" },
+    { name = "chromadb", specifier = ">=1.4.1" },
+    { name = "llama-index-core", specifier = ">=0.14.13" },
+    { name = "llama-index-readers-file", specifier = ">=0.5.6" },
+    { name = "pystemmer", specifier = ">=2.2.0" },
+    { name = "typer" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.14.14" }]
+
+[[package]]
 name = "kubernetes"
 version = "35.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2285,37 +2316,6 @@ wheels = [
 asyncio = [
     { name = "greenlet" },
 ]
-
-[[package]]
-name = "know"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "bm25s" },
-    { name = "chromadb" },
-    { name = "llama-index-core" },
-    { name = "llama-index-readers-file" },
-    { name = "pystemmer" },
-    { name = "typer" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bm25s", specifier = ">=0.1.10" },
-    { name = "chromadb", specifier = ">=1.4.1" },
-    { name = "llama-index-core", specifier = ">=0.14.13" },
-    { name = "llama-index-readers-file", specifier = ">=0.5.6" },
-    { name = "pystemmer", specifier = ">=2.2.0" },
-    { name = "typer" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.14.14" }]
 
 [[package]]
 name = "striprtf"
