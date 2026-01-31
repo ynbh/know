@@ -22,6 +22,12 @@ Requires Python 3.13+ and `uv`.
 uv sync
 ```
 
+### Install with pipx
+
+```bash
+pipx install git+https://github.com/ynbh/know.git
+```
+
 ## Quick start
 
 ```bash
