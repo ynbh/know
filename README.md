@@ -36,7 +36,7 @@ uv run know "retrieval augmented generation"
 know add <dir>
 know remove <dir>
 know index [--log] [--ext .md --ext .txt] [--recursive/--no-recursive] \
-  [--chunk-size 512] [--overlap 50] [--force] [--glob "**/*.md"] \
+  [--chunk-size 512] [--overlap 50] [--force] [--dry] [--glob "**/*.md"] \
   [--since 7d] [--report report.json]
 know search <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
   [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
@@ -53,6 +53,7 @@ know reset
 - Use `--glob` to narrow indexing to matching paths (e.g. `notes/**`).
 - Use `--since` with `7d`, `12h`, or `2024-01-15` to skip older files.
 - Use `--force` to clear and rebuild the index from scratch.
+- Use `--dry` to preview how many chunks would be added without writing.
 - Use `--bm25` for lexical search, or `--hybrid` for BM25 + vector fusion.
 - BM25 search builds a lightweight index from stored chunks and caches it under `know_index/bm25`.
 - Use `--benchmark` to compare dense vs BM25 results side-by-side.

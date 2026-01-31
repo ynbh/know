@@ -17,6 +17,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 from src.bm25 import BM25Index, load_cached_index, save_cached_index
+from src.cache import CACHE_PATH, load_file_cache, save_file_cache
 from src.models import BenchmarkResult, ResultSet
 from src.retrieval import SearchItem, rrf_fuse
 
@@ -53,10 +54,7 @@ class IndexReport:
 
 
 def has_index() -> bool:
-    try:
-        return dense_collection.count() > 0
-    except Exception:
-        return False
+    return dense_collection.count() > 0
 
 
 def ingest(
@@ -69,6 +67,7 @@ def ingest(
     chunk_overlap: int = 50,
     log: bool = False,
     report: bool = False,
+    dry_run: bool = False,
 ) -> tuple[int, int] | IndexReport:
     ext_filter = extensions or SUPPORTED_EXTENSIONS
 
@@ -82,22 +81,14 @@ def ingest(
         filename_as_id=True,
     )
 
-    try:
-        documents = reader.load_data()
-    except Exception as e:
-        console.print(f"[red]Error:[/] {e}")
-        return 0, 0
-
-    if not documents:
-        console.print("[yellow]No documents found[/]")
-        return 0, 0
+    documents = reader.load_data()
 
     base_dir = Path(directory)
     if include_globs:
         filtered: list = []
         base_resolved = base_dir.resolve()
         for doc in documents:
-            source_path = doc.metadata.get("file_path", "")
+            source_path = doc.metadata["file_path"]
             source_resolved = Path(source_path).resolve()
             if source_resolved.is_relative_to(base_resolved):
                 rel_str = source_resolved.relative_to(base_resolved).as_posix()
@@ -114,7 +105,7 @@ def ingest(
     if since_timestamp is not None:
         filtered = []
         for doc in documents:
-            source_path = doc.metadata.get("file_path", "")
+            source_path = doc.metadata["file_path"]
             mtime = Path(source_path).stat().st_mtime
             if mtime >= since_timestamp:
                 filtered.append(doc)
@@ -122,18 +113,59 @@ def ingest(
 
     if not documents:
         console.print("[yellow]No documents found[/]")
+        if report:
+            return IndexReport(added=0, skipped=0, skip_entries=[])
         return 0, 0
 
     if log:
         console.log(f"Loaded [green]{len(documents)}[/] documents")
 
+    cache = load_file_cache(chunk_size, chunk_overlap)
+    cache_updates: dict[str, dict] = dict(cache)
+    filtered: list = []
+    skipped_cache = 0
+    skip_entries: list[SkipEntry] = []
+    for doc in documents:
+        source_path = doc.metadata["file_path"]
+        stat = Path(source_path).stat()
+        cache_entry = cache.get(source_path)
+        if (
+            cache_entry
+            and cache_entry.get("indexed")
+            and cache_entry.get("mtime") == stat.st_mtime
+            and cache_entry.get("size") == stat.st_size
+        ):
+            skipped_cache += 1
+            if report:
+                skip_entries.append(
+                    SkipEntry(
+                        path=source_path,
+                        chunk_index=0,
+                        reason="unchanged_file",
+                        collides_with=None,
+                    )
+                )
+            continue
+        cache_updates[source_path] = {
+            "mtime": stat.st_mtime,
+            "size": stat.st_size,
+            "indexed": False,
+        }
+        filtered.append(doc)
+
+    if not filtered:
+        console.print("[yellow]No documents found[/]")
+        if report:
+            return IndexReport(added=0, skipped=skipped_cache, skip_entries=skip_entries)
+        return 0, skipped_cache
+
     splitter = SentenceSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    nodes = splitter.get_nodes_from_documents(documents)
+    nodes = splitter.get_nodes_from_documents(filtered)
 
     if log:
         console.log(f"Created [green]{len(nodes)}[/] chunks")
 
-    added, skipped = 0, 0
+    added, skipped = 0, skipped_cache
     batch_size = 100
 
     # prepare all chunks first, checking which already exist
@@ -143,19 +175,19 @@ def ingest(
     node_data: list[tuple[str, str, dict]] = []
 
     for node in nodes:
-        source_path = node.metadata.get("file_path", "unknown")
+        source_path = node.metadata["file_path"]
         chunk_index = node.metadata.get("chunk_index", 0)
         chunk_id = hashlib.md5(
             f"{source_path}:{chunk_index}:{node.text}".encode()
         ).hexdigest()
         file_path = Path(source_path)
-        stat = file_path.stat() if file_path.exists() else None
+        stat = file_path.stat()
         doc_text = f"{file_path.name}\n\n{node.text}"
         meta = {
             "path": source_path,
             "filename": file_path.name,
             "extension": file_path.suffix,
-            "size_bytes": stat.st_size if stat else 0,
+            "size_bytes": stat.st_size,
             "chunk_index": chunk_index,
             "node_id": node.node_id,
         }
@@ -171,26 +203,29 @@ def ingest(
 
     # filter to only new chunks (track seen to avoid duplicates within batch)
     seen_ids: dict[str, str] = {}  # chunk_id -> path of first occurrence
-    skip_entries: list[SkipEntry] = []
     for chunk_id, doc_text, meta in node_data:
         if chunk_id in existing_ids:
             skipped += 1
             if report:
-                skip_entries.append(SkipEntry(
-                    path=meta["path"],
-                    chunk_index=meta["chunk_index"],
-                    reason="already_indexed",
-                    collides_with=None,  # we don't track the original for existing
-                ))
+                skip_entries.append(
+                    SkipEntry(
+                        path=meta["path"],
+                        chunk_index=meta["chunk_index"],
+                        reason="already_indexed",
+                        collides_with=None,  # we don't track the original for existing
+                    )
+                )
         elif chunk_id in seen_ids:
             skipped += 1
             if report:
-                skip_entries.append(SkipEntry(
-                    path=meta["path"],
-                    chunk_index=meta["chunk_index"],
-                    reason="duplicate_content",
-                    collides_with=seen_ids[chunk_id],
-                ))
+                skip_entries.append(
+                    SkipEntry(
+                        path=meta["path"],
+                        chunk_index=meta["chunk_index"],
+                        reason="duplicate_content",
+                        collides_with=seen_ids[chunk_id],
+                    )
+                )
         else:
             seen_ids[chunk_id] = meta["path"]
             pending_ids.append(chunk_id)
@@ -198,7 +233,18 @@ def ingest(
             pending_metas.append(meta)
 
     if log:
-        console.log(f"Skipping {skipped} existing, adding {len(pending_ids)} new")
+        console.log(
+            f"Skipping {skipped} unchanged/existing/duplicate, adding {len(pending_ids)} new"
+        )
+
+    if dry_run:
+        added = len(pending_ids)
+        console.print(
+            f"[yellow]Dry run:[/] Would index [bold]{added}[/] new, [dim]{skipped} unchanged[/]"
+        )
+        if report:
+            return IndexReport(added=added, skipped=skipped, skip_entries=skip_entries)
+        return added, skipped
 
     with Progress(
         TextColumn("[bold cyan]Indexing[/]"),
@@ -233,6 +279,11 @@ def ingest(
             added += len(batch_ids)
             progress.update(task, advance=1, added=added, skipped=skipped)
 
+    for doc in filtered:
+        source_path = doc.metadata["file_path"]
+        if source_path in cache_updates:
+            cache_updates[source_path]["indexed"] = True
+    save_file_cache(cache_updates, chunk_size, chunk_overlap)
     console.print(
         f"[green]OK[/] Indexed [bold]{added}[/] new, [dim]{skipped} unchanged[/]"
     )
@@ -263,8 +314,6 @@ def _filter_items(
                 continue
         if since_timestamp is not None:
             path = Path(source_path)
-            if not path.exists():
-                continue
             mtime = path.stat().st_mtime
             if mtime < since_timestamp:
                 continue
@@ -451,12 +500,6 @@ def clear():
     client.delete_collection(name="documents")
     dense_collection = client.get_or_create_collection(name="documents")
     shutil.rmtree("./know_index/bm25", ignore_errors=True)
+    CACHE_PATH.unlink(missing_ok=True)
     console.print("[green]Collection cleared")
 
-
-if __name__ == "__main__":
-    ingest(
-        "/Users/yashasbhat/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault",
-        extensions=[".md"],
-        log=True,
-    )

@@ -196,6 +196,10 @@ def index(
     force: Annotated[
         bool, typer.Option("--force", "-f", help="Clear and re-index everything")
     ] = False,
+    dry: Annotated[
+        bool,
+        typer.Option("--dry", help="Show what would be indexed without writing"),
+    ] = False,
     report: Annotated[
         Optional[Path], typer.Option("--report", help="Write skip report JSON to file")
     ] = None,
@@ -207,7 +211,10 @@ def index(
         console.print("[yellow]No directories added. Use 'know add <dir>' first.[/]")
         return
 
-    if force:
+    if force and dry:
+        console.print("[yellow]Dry run:[/] Ignoring --force (no changes will be made).")
+
+    if force and not dry:
         clear()
 
     processed_exts = []
@@ -227,7 +234,10 @@ def index(
         console.print("[red]Error:[/] --since must be like 7d, 12h, 30m, or 2024-01-15")
         raise typer.Exit(1)
 
-    console.print(f"[bold]Indexing {len(dirs)} directories[/]")
+    if dry:
+        console.print(f"[bold]Dry run:[/] Scanning {len(dirs)} directories")
+    else:
+        console.print(f"[bold]Indexing {len(dirs)} directories[/]")
     if log:
         console.print(f"Extensions: {ext_filter}")
         if processed_globs:
@@ -251,6 +261,7 @@ def index(
             chunk_overlap=chunk_overlap,
             log=log,
             report=report is not None,
+            dry_run=dry,
         )
         if isinstance(result, IndexReport):
             total_added += result.added
@@ -260,9 +271,14 @@ def index(
             total_added += result[0]
             total_skipped += result[1]
 
-    console.print(
-        f"[green]OK[/] Total: [bold]{total_added}[/] new, [dim]{total_skipped} unchanged[/]"
-    )
+    if dry:
+        console.print(
+            f"[yellow]Dry run:[/] Would index [bold]{total_added}[/] new, [dim]{total_skipped} unchanged[/]"
+        )
+    else:
+        console.print(
+            f"[green]OK[/] Total: [bold]{total_added}[/] new, [dim]{total_skipped} unchanged[/]"
+        )
 
     if report is not None:
         combined = IndexReport(

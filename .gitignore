@@ -17,3 +17,5 @@ ROADMAP.md
 
 # Benchmark datasets
 bench/
+
+.env 
