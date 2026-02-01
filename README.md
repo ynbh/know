@@ -48,6 +48,7 @@ know search <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
   [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
 know <query> [--limit 5] [--glob "**/*.md"] [--since 7d] \
   [--bm25 | --hybrid] [--benchmark] [--plain | --json] [--json-out results.json]
+know prune [--dry] [--log]
 know dirs
 know reset
 ```
@@ -65,6 +66,7 @@ know reset
 - Use `--benchmark` to compare dense vs BM25 results side-by-side.
 - Use `--plain` for plain-text output, `--json` for JSON output, and `--json-out` to save JSON to a file.
 - Use `--report` to capture skipped chunks (already indexed or duplicate content).
+- Use `prune` to remove orphaned chunks from deleted files.
 
 ## How it works
 
