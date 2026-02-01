@@ -28,10 +28,29 @@ dense_collection = client.get_or_create_collection(name="documents")
 
 SUPPORTED_EXTENSIONS = [
     # documents
-    ".md", ".txt", ".pdf", ".docx", ".pptx", ".html",
+    ".md",
+    ".txt",
+    ".pdf",
+    ".docx",
+    ".pptx",
+    ".html",
     # code
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
-    ".c", ".cpp", ".h", ".hpp", ".rb", ".sh", ".lua", ".swift",
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".rb",
+    ".sh",
+    ".lua",
+    ".swift",
 ]
 
 
@@ -156,7 +175,9 @@ def ingest(
     if not filtered:
         console.print("[yellow]No documents found[/]")
         if report:
-            return IndexReport(added=0, skipped=skipped_cache, skip_entries=skip_entries)
+            return IndexReport(
+                added=0, skipped=skipped_cache, skip_entries=skip_entries
+            )
         return 0, skipped_cache
 
     splitter = SentenceSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
@@ -506,54 +527,54 @@ def clear():
 
 def prune(dry_run: bool = False, log: bool = False) -> tuple[int, int]:
     all_data = dense_collection.get(include=["metadatas"])
-    
+
     if not all_data["ids"]:
         console.print("[yellow]No chunks in index[/]")
         return 0, 0
-    
+
     orphan_ids: list[str] = []
     checked_paths: dict[str, bool] = {}  # cache path existence checks
-    
+
     for chunk_id, meta in zip(all_data["ids"], all_data["metadatas"]):
         path = meta.get("path", "")
         if not path:
             orphan_ids.append(chunk_id)
             continue
-            
+
         if path not in checked_paths:
             checked_paths[path] = Path(path).exists()
-        
+
         if not checked_paths[path]:
             orphan_ids.append(chunk_id)
             if log:
                 console.log(f"Orphaned: {path}")
-    
+
     total_chunks = len(all_data["ids"])
     orphan_count = len(orphan_ids)
-    
+
     if orphan_count == 0:
         console.print("[green]No orphaned chunks found[/]")
         return 0, total_chunks
-    
+
     if dry_run:
         console.print(
             f"[yellow]Dry run:[/] Would remove [bold]{orphan_count}[/] orphaned chunks "
             f"(from {len([p for p, exists in checked_paths.items() if not exists])} deleted files)"
         )
         return orphan_count, total_chunks
-    
+
     batch_size = 100
     for i in range(0, len(orphan_ids), batch_size):
         batch = orphan_ids[i : i + batch_size]
         dense_collection.delete(ids=batch)
-    
+
     if CACHE_PATH.exists():
         cache_data = json.loads(CACHE_PATH.read_text())
         files = cache_data.get("files", {})
         cleaned_files = {p: v for p, v in files.items() if Path(p).exists()}
         cache_data["files"] = cleaned_files
         CACHE_PATH.write_text(json.dumps(cache_data, indent=2))
-    
+
     console.print(
         f"[green]Pruned[/] [bold]{orphan_count}[/] orphaned chunks "
         f"({total_chunks - orphan_count} remaining)"

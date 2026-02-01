@@ -8,7 +8,15 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from src.db import ingest, search as run_search, clear, prune as run_prune, SUPPORTED_EXTENSIONS, has_index, IndexReport
+from src.db import (
+    ingest,
+    search as run_search,
+    clear,
+    prune as run_prune,
+    SUPPORTED_EXTENSIONS,
+    has_index,
+    IndexReport,
+)
 from src.output import render_response
 
 app = typer.Typer(help="know - semantic search CLI")
@@ -71,7 +79,17 @@ def _maybe_prefix_search(args: list[str]) -> list[str]:
     if len(args) < 2:
         return args
     first = args[1]
-    if first in {"add", "remove", "index", "search", "prune", "dirs", "reset", "--help", "-h"}:
+    if first in {
+        "add",
+        "remove",
+        "index",
+        "search",
+        "prune",
+        "dirs",
+        "reset",
+        "--help",
+        "-h",
+    }:
         return args
     if first.startswith("-"):
         return args

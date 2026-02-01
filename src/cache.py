@@ -20,7 +20,9 @@ def load_file_cache(chunk_size: int, chunk_overlap: int) -> dict[str, dict]:
     return files
 
 
-def save_file_cache(files: dict[str, dict], chunk_size: int, chunk_overlap: int) -> None:
+def save_file_cache(
+    files: dict[str, dict], chunk_size: int, chunk_overlap: int
+) -> None:
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "config": {"chunk_size": chunk_size, "chunk_overlap": chunk_overlap},
